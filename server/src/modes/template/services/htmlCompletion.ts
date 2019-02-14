@@ -12,13 +12,15 @@ import { HTMLDocument } from '../parser/htmlParser';
 import { TokenType, createScanner, ScannerState } from '../parser/htmlScanner';
 import { IHTMLTagProvider } from '../tagProviders';
 import * as emmet from 'vscode-emmet-helper';
+import { VueFileInfo } from '../../script/findComponents';
 
 export function doComplete(
   document: TextDocument,
   position: Position,
   htmlDocument: HTMLDocument,
   tagProviders: IHTMLTagProvider[],
-  emmetConfig: emmet.EmmetConfiguration
+  emmetConfig: emmet.EmmetConfiguration,
+  vueFileInfo: VueFileInfo
 ): CompletionList {
   const result: CompletionList = {
     isIncomplete: false,
@@ -27,9 +29,74 @@ export function doComplete(
 
   const offset = document.offsetAt(position);
   const node = htmlDocument.findNodeBefore(offset);
-  if (!node || node.isInterpolation) {
+  if (!node) {
     return result;
   }
+  
+  const nodeText = document.getText(Range.create(document.positionAt(node.start), document.positionAt(node.end)));
+  const nodeTextCursorOffset = document.offsetAt(position) - node.start;
+  // Property accessor
+  if (nodeText[nodeTextCursorOffset - 1] === '.') {
+    // Fix later, heuristic for getting current word
+    const word = nodeText.replace(/[{}.\s]/g, '');
+    const match = vueFileInfo.componentInfo.dataFuncReturnTypeProperties
+      ? vueFileInfo.componentInfo.dataFuncReturnTypeProperties.find(d => d.name === word)
+      : null;
+    
+    if (match) {
+      const result: CompletionList = {
+        isIncomplete: false,
+        items: []
+      };
+      if (match.children) {
+        match.children.forEach(c => {
+          result.items.push({
+            label: c,
+            documentation: {
+              kind: 'markdown',
+              value: `\`${c}\`, child of data \`${match.name}\``,
+            },
+            kind: CompletionItemKind.Property
+          });
+        });
+      }
+      return result;
+    }
+  }
+
+  if (node.isInterpolation) {
+    const result: CompletionList = {
+      isIncomplete: true,
+      items: []
+    };
+    
+    if (vueFileInfo.componentInfo.props) {
+      vueFileInfo.componentInfo.props.forEach(p => {
+        result.items.push({
+          label: p.name,
+          documentation: {
+            kind: 'markdown',
+            value: `\`${p.name}\` prop`
+          },
+          kind: CompletionItemKind.Property
+        });
+      });
+    }
+    if (vueFileInfo.componentInfo.dataFuncReturnTypeProperties) {
+      vueFileInfo.componentInfo.dataFuncReturnTypeProperties.forEach(p => {
+        result.items.push({
+          label: p.name,
+          documentation: {
+            kind: 'markdown',
+            value: `\`${p}\` prop`
+          }
+        });
+      });
+    }
+    
+    return result;
+  }
+
   const text = document.getText();
   const scanner = createScanner(text, node.start);
   let currentTag: string;

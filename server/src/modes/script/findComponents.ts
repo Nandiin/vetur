@@ -2,15 +2,77 @@ import * as ts from 'typescript';
 import { Definition, Range } from 'vscode-languageserver-types';
 import Uri from 'vscode-uri';
 
+export interface VueFileInfo {
+  /**
+   * The defualt export component info
+   */
+  componentInfo: ComponentInfo;
+}
+
 export interface PropInfo {
   name: string;
   doc?: string;
+}
+
+export interface DataInfo {
+  name: string;
+  children?: string[];
 }
 
 export interface ComponentInfo {
   name: string;
   definition?: Definition;
   props?: PropInfo[];
+  dataFuncReturnTypeProperties?: DataInfo[];
+}
+
+export function getComponentInfo(service: ts.LanguageService, fileFsPath: string): VueFileInfo | null {
+  const program = service.getProgram();
+  if (!program) {
+    return null;
+  }
+
+  const sourceFile = program.getSourceFile(fileFsPath)!;
+  const exportStmt = sourceFile.statements.filter(st => st.kind === ts.SyntaxKind.ExportAssignment);
+  if (exportStmt.length === 0) {
+    return null;
+  }
+  const exportExpr = (exportStmt[0] as ts.ExportAssignment).expression;
+  const comp = getComponentFromExport(exportExpr);
+  if (!comp) {
+    return null;
+  }
+  const checker = program.getTypeChecker();
+  const compType = checker.getTypeAtLocation(comp);
+  
+  const arrayProps = getArrayProps(compType, checker);
+
+  const dataFuncType = getPropertyTypeOfType(compType, 'data' ,checker);
+  if (!dataFuncType) {
+    return null;
+  }
+
+  const dataFuncReturnType = checker.getReturnTypeOfSignature(dataFuncType.getCallSignatures()[0]);
+  const dataFuncReturnTypeProperties = dataFuncReturnType.getProperties().map(s => {
+    const pType = getSymbolType(s, checker);
+    if (!pType) {
+      return {
+        name: s.name
+      };
+    }
+    return {
+      name: s.name,
+      children: pType.getProperties().map(s => s.name)
+    };
+  });
+  
+  return {
+    componentInfo: {
+      name: 'foo',
+      props: arrayProps,
+      dataFuncReturnTypeProperties
+    }
+  };
 }
 
 export function findComponents(service: ts.LanguageService, fileFsPath: string): ComponentInfo[] {
